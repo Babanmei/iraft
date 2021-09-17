@@ -10,30 +10,32 @@ use async_std::{
 use futures::{AsyncBufReadExt, FutureExt, sink::SinkExt, StreamExt};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures::channel::mpsc;
-
-use crate::config::Config;
-use crate::memory_store::MemoryStore;
-use crate::message::{Event, Message};
-use crate::node::RaftNode;
 use futures::io::BufReader;
+
+use crate::conf::Config;
+use crate::log::Log;
+use crate::memory_store::MemoryStore;
+use crate::message::{Address, Event, Message};
+use crate::node::Node;
 
 const TICK: Duration = Duration::from_millis(10000);
 
 pub struct RaftServer {
-    node: RaftNode<MemoryStore>,
+    node: Node,
     node_rx: UnboundedReceiver<Message>,
     conf: Config,
 }
 
 impl RaftServer {
-    pub fn new(conf: Config) -> RaftServer {
+    pub async fn new(conf: Config) -> RaftServer {
         //通道的两头, 接收方给RaftNode(当前节点),
         // 当此node需要发送消息给peer,
         // 从rx发送消息,在event_loop中的rx收到消息再发送出去
         let (node_tx, node_rx) = mpsc::unbounded();
-        let store = MemoryStore {};
+        let log = Log::new(Box::new(MemoryStore {}));
+        let peers: Vec<String> = conf.peers.keys().map(|k| k.clone()).collect();
         RaftServer {
-            node: RaftNode::new(conf.id.clone(), store, node_tx),
+            node: Node::new(conf.id.clone(), log, peers, node_tx).await.unwrap(),
             node_rx,
             conf,
         }
@@ -53,13 +55,12 @@ impl RaftServer {
 
         //2,
         let (tcp_out_tx, tcp_out_rx) = mpsc::unbounded();
-        let (task, send) = RaftServer::tcp_sender(self.conf.peers.clone(), tcp_out_rx).remote_handle();
+        let (task, send) = RaftServer::tcp_sender(self.conf.id.clone(),self.conf.peers.clone(), tcp_out_rx).remote_handle();
         async_std::task::spawn(task);
 
         //集中处理所有请求, 节点之间以及client的请求
         //用channel链接此函数与send,receive两函数
-        let (task, event_loop) = self
-            .event_loop(tcp_in_rx, tcp_out_tx, client_rx)
+        let (task, event_loop) = self.event_loop( tcp_in_rx, tcp_out_tx, client_rx)
             .remote_handle();
         async_std::task::spawn(task);
 
@@ -78,19 +79,19 @@ impl RaftServer {
         let mut client_rx = UnboundedReceiver::from(client_rx);
         let mut node_rx = UnboundedReceiver::from(self.node_rx);
         let mut tcp_in_rx = UnboundedReceiver::from(tcp_in_rx);
-        let mut tcp_out_tx = UnboundedSender::from(tcp_out_tx);
 
         let mut tick = async_std::stream::interval(TICK);
+        //在tick/step的时候,node的角色会改变,不同的角色会有不同的事件发生
         let mut node = self.node;
         loop {
             futures::select! {
                 _ = tick.next().fuse() => node = node.tick()?,
                 //处理其他node发送过来的消息
                 msg = tcp_in_rx.next().fuse() => match msg{
-                    Some(msg) => *&(node).step(msg)?,
+                    Some(msg) => node = node.step(msg)?,
                     None => (),
                 },
-                //接收从RaftNode过来的消息, 转发到send函数处理
+                //接收从RaftNode(自己)过来的消息, 转发到send函数处理
                 msg = node_rx.next().fuse() => match msg {
                     Some(msg) => {tcp_out_tx.unbounded_send(msg)?},
                     None =>(),
@@ -109,7 +110,7 @@ impl RaftServer {
         let listener = TcpListener::bind(addr).await?;
         let mut incoming = listener.incoming();
         while let Some(stream) = incoming.next().await {
-            let mut stream = stream.unwrap();
+            let stream = stream.unwrap();
             let out_rx = out_rx.clone();
             async_std::task::spawn(connection_loop(out_rx, stream));
         }
@@ -119,6 +120,7 @@ impl RaftServer {
 
     /// 此node向其他节点的消息处理逻辑
     async fn tcp_sender(
+        node_id: String,
         peers: HashMap<String, String>,
         out_tx: UnboundedReceiver<Message>,
     ) -> Result<()> {
@@ -134,16 +136,25 @@ impl RaftServer {
             );
         }
 
-        while let Some(msg) = out_tx.next().await {
+        while let Some(mut msg) = out_tx.next().await {
             let to: Vec<String> = peer_txs.keys().cloned().collect();
-            for id in to {
+            if msg.from == Address::Local {
+                msg.from = Address::Peer(node_id.clone());
+            }
+            let node_id_to = match &msg.to {
+                Address::Peer(peer) => vec![peer.to_string()],
+                Address::Peers => to,
+                _ => vec![],
+            };
+            for id in node_id_to {
                 let send = peer_txs.get_mut(&id).unwrap();
-                send.unbounded_send(msg);
+                send.unbounded_send(msg.clone());
             }
         }
         Ok(())
     }
 }
+
 
 async fn send_message_to_peer(addr: String, rx: UnboundedReceiver<Message>) -> Result<()> {
     let mut rx = UnboundedReceiver::from(rx);
@@ -153,7 +164,8 @@ async fn send_message_to_peer(addr: String, rx: UnboundedReceiver<Message>) -> R
                 println!("success connection: {}", &addr);
                 while let Some(msg) = rx.next().await {
                     //TODO ser msg
-                    socket.write_all(&vec![1, 2, 3]).await.unwrap();
+                    let enc_msg = bincode::serialize(&msg).unwrap();
+                    socket.write_all(&enc_msg).await.unwrap();
                     socket.flush().await;
                 }
             }
@@ -164,18 +176,17 @@ async fn send_message_to_peer(addr: String, rx: UnboundedReceiver<Message>) -> R
 }
 
 async fn connection_loop(out_rx: UnboundedSender<Message>, mut stream: TcpStream) -> Result<()> {
-
     let mut buffer = [0; 1024];
     loop {
         let nbytes = stream.read(&mut buffer).await?;
         if nbytes == 0 {
             return Ok(());
         }
-        println!("{:?}", &buffer[..nbytes]);
+        let msg: Message = bincode::deserialize(&buffer[..nbytes]).unwrap();
 
         let mut out_rx = UnboundedSender::from(out_rx.clone());
-        let m = Message{term: 11, event: Event::None};
-        out_rx.unbounded_send(m);
+        //let m = Message { term: 11, from:Address::Local, to: Address::Peers, event: Event::None };
+        out_rx.unbounded_send(msg);
     }
     Ok(())
 }

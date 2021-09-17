@@ -1,14 +1,14 @@
 use crate::Store;
-use serde_derive::{Deserialize, Serialize};
 
-
-#[derive(Clone, Debug)]
-pub struct Log<S: Store> {
-    store: S,
+#[derive(Debug)]
+pub struct Log {
+    store: Box<dyn Store>,
+    pub last_index: u64,
+    pub last_term: u64,
 }
 
-impl<S> Log<S> where S: Store {
-    pub fn new(store: S) -> Log<S> {
-        Log { store }
+impl Log {
+    pub fn new(store: Box<Store>) -> Log{
+        Log { store, last_term:0, last_index:0 }
     }
 }
