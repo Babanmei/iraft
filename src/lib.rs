@@ -1,16 +1,9 @@
-mod node;
+
 mod transport;
 mod store;
 mod log;
 pub mod server;
-pub mod memory_store;
-pub mod config;
+pub mod conf;
 pub mod message;
+pub mod node;
 
-pub trait Raft {
-
-}
-
-pub trait Store: std::fmt::Debug/*raftnode {:#?}*/{
-
-}
