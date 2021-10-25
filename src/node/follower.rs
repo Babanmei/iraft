@@ -38,7 +38,7 @@ impl RoleNode<Follower> {
             let (li, lt) = ((&self.log).last_index.clone(), (&self.log).last_term);
             let mut node = self.transfer_role(Candidate::new())?;
             node.term += 1;
-            //todo save log
+            node.log.save_metadata(node.term, None)?;
             node.send(Address::Peers, Event::SolicitVote {
                 last_index: li,
                 last_term: lt,
@@ -53,7 +53,7 @@ impl RoleNode<Follower> {
         //1, 如果msg.term > self.term: 说明是新一届的消息, 自己还follower(保存log,拒绝其他节点请求)
         if msg.term > self.term || self.role.leader.is_none() {
             self.term = msg.term;
-            //todo save log
+            self.log.save_metadata(self.term, None)?;
             if let Address::Peer(ref from) = &msg.from {
                 self.role.leader = Some(from.clone());
                 return Node::Follower(self.into()).step(msg);
@@ -98,8 +98,8 @@ impl RoleNode<Follower> {
                 self.send((&msg.from).clone(), Event::GrantVote)?;
                 if let Address::Peer(from) = &msg.from {
                     self.role.voted_for = Some(from.clone());
+                    self.log.save_metadata(self.term, Some(&from))?
                 }
-                //todo save log
             }
             _ => (),
         }

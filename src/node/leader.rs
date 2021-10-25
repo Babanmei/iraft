@@ -16,14 +16,14 @@ impl Leader {
 impl RoleNode<Leader> {
     /// 超过心跳间隔 发送心跳
     pub fn tick(mut self) -> Result<Node> {
-        println!("leader tick");
         if !self.peers.is_empty() {
             self.role.heartbeat_ticks += 1;
+            //持续心跳
             if self.role.heartbeat_ticks >= HEARTBEAT_INTERVAL {
                 self.role.heartbeat_ticks = 0;
                 self.send(Address::Peers, Event::Heartbeat {
-                    commit_index: 0,
-                    commit_term: 0,
+                    commit_index: self.log.commit_index,
+                    commit_term: self.log.commit_term,
                 })?;
             }
         }
@@ -31,6 +31,7 @@ impl RoleNode<Leader> {
     }
 
     pub fn step(mut self, msg: Message) -> Result<Node> {
+        //有人起义成功了, 不做无为抵抗
         if msg.term > self.term {
             if let Address::Peer(from) = &msg.from {
                 let mut node = self.transfer_role(super::Follower::new(Some(from.clone()), None))?;

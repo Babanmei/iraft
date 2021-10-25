@@ -13,10 +13,10 @@ use futures::channel::mpsc;
 use futures::io::BufReader;
 
 use crate::conf::Config;
-use crate::log::Log;
-use crate::memory_store::MemoryStore;
 use crate::message::{Address, Event, Message};
 use crate::node::Node;
+use crate::log::memory_store::MemoryStore;
+use crate::log::log::Log;
 
 const TICK: Duration = Duration::from_millis(10000);
 
@@ -30,9 +30,9 @@ impl RaftServer {
     pub async fn new(conf: Config) -> RaftServer {
         //通道的两头, 接收方给RaftNode(当前节点),
         // 当此node需要发送消息给peer,
-        // 从rx发送消息,在event_loop中的rx收到消息再发送出去
+        // 从tx发送消息,在event_loop中的rx收到消息再发送出去
         let (node_tx, node_rx) = mpsc::unbounded();
-        let log = Log::new(Box::new(MemoryStore {}));
+        let log = Log::new(Box::new(MemoryStore::new()));
         let peers: Vec<String> = conf.peers.keys().map(|k| k.clone()).collect();
         RaftServer {
             node: Node::new(conf.id.clone(), log, peers, node_tx).await.unwrap(),
@@ -164,7 +164,7 @@ async fn send_message_to_peer(addr: String, rx: UnboundedReceiver<Message>) -> R
                 println!("success connection: {}", &addr);
                 while let Some(msg) = rx.next().await {
                     //TODO ser msg
-                    let enc_msg = bincode::serialize(&msg).unwrap();
+                    let enc_msg = bincode::serialize(&msg)?;
                     socket.write_all(&enc_msg).await.unwrap();
                     socket.flush().await;
                 }
@@ -182,7 +182,7 @@ async fn connection_loop(out_rx: UnboundedSender<Message>, mut stream: TcpStream
         if nbytes == 0 {
             return Ok(());
         }
-        let msg: Message = bincode::deserialize(&buffer[..nbytes]).unwrap();
+        let msg: Message = bincode::deserialize(&buffer[..nbytes])?;
 
         let mut out_rx = UnboundedSender::from(out_rx.clone());
         //let m = Message { term: 11, from:Address::Local, to: Address::Peers, event: Event::None };

@@ -1,13 +1,11 @@
 use anyhow::Result;
 use futures::channel::mpsc::UnboundedSender;
 
-use crate::log::Log;
-use crate::memory_store::MemoryStore;
 use crate::message::{Address, Event, Message};
 use crate::node::candidate::Candidate;
 use crate::node::follower::Follower;
 use crate::node::leader::Leader;
-use crate::Store;
+use crate::log::log::Log;
 
 pub mod leader;
 pub mod follower;
@@ -30,7 +28,11 @@ pub enum Node {
 
 impl Node {
     pub async fn new(id: String, log: Log, peers: Vec<String>, tx: UnboundedSender<Message>) -> Result<Node> {
-        let n = RoleNode { id, log, peers, term: 0, to_peer_tx: tx, role: Follower::new(None, None) };
+        let (term, voted_for) = match log.get_metadata() {
+            Ok(v) => (v.0, v.1),
+            Err(_) => (0, None),
+        };
+        let n = RoleNode { id, log, peers, term, to_peer_tx: tx, role: Follower::new(None, voted_for) };
         Ok(Node::Follower(n))
     }
 
