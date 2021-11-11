@@ -17,6 +17,7 @@ use crate::message::{Address, Event, Message};
 use crate::node::Node;
 use crate::log::memory_store::MemoryStore;
 use crate::log::log::Log;
+use crate::driver::State;
 
 const TICK: Duration = Duration::from_millis(10000);
 
@@ -27,7 +28,7 @@ pub struct RaftServer {
 }
 
 impl RaftServer {
-    pub async fn new(conf: Config) -> RaftServer {
+    pub async fn new(conf: Config, state: Box<dyn State>) -> RaftServer {
         //通道的两头, 接收方给RaftNode(当前节点),
         // 当此node需要发送消息给peer,
         // 从tx发送消息,在event_loop中的rx收到消息再发送出去
@@ -35,7 +36,7 @@ impl RaftServer {
         let log = Log::new(Box::new(MemoryStore::new()));
         let peers: Vec<String> = conf.peers.keys().map(|k| k.clone()).collect();
         RaftServer {
-            node: Node::new(conf.id.clone(), log, peers, node_tx).await.unwrap(),
+            node: Node::new(conf.id.clone(), log, peers, node_tx, state).await.unwrap(),
             node_rx,
             conf,
         }
@@ -163,9 +164,8 @@ async fn send_message_to_peer(addr: String, rx: UnboundedReceiver<Message>) -> R
             Ok(mut socket) => {
                 println!("success connection: {}", &addr);
                 while let Some(msg) = rx.next().await {
-                    //TODO ser msg
                     let enc_msg = bincode::serialize(&msg)?;
-                    socket.write_all(&enc_msg).await.unwrap();
+                    socket.write_all(&enc_msg).await?;
                     socket.flush().await;
                 }
             }

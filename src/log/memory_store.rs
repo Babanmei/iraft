@@ -18,7 +18,7 @@ impl MemoryStore {
 
 impl Store for MemoryStore {
     fn set_metadata(&mut self, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
-        self.metadata.insert(key, value).unwrap();
+        self.metadata.insert(key, value);
         Ok(())
     }
 

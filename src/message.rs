@@ -1,4 +1,5 @@
 use serde_derive::{Deserialize, Serialize};
+use crate::log::log::Entry;
 
 /// A message address.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
@@ -31,6 +32,15 @@ pub enum Event {
     ConfirmLeader {
         commit_index: u64,
         has_committed: bool,
+    },
+    //日志复制
+    ReplicateEntries {
+        //日志index(不算这一条日志的长度, 就是在此之前的日志长度)
+        base_index: u64,
+        //任期
+        base_term: u64,
+        //日志
+        entries: Vec<Entry>,
     },
     None,
 }

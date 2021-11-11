@@ -55,10 +55,14 @@ impl RoleNode<Candidate> {
                 }
             }
 
-            Event::Heartbeat{..} => {
+            Event::Heartbeat { .. } => {
                 if let Address::Peer(from) = &msg.from {
                     return self.transfer_follower(msg.term, from.clone())?.step(msg);
                 }
+            }
+
+            Event::ReplicateEntries {base_index, base_term, entries} => {
+
             }
             _ => {}
         }
@@ -94,7 +98,11 @@ impl RoleNode<Candidate> {
     }
 
     fn transfer_leader(mut self) -> Result<Node> {
-        let mut node = self.transfer_role(super::Leader::new())?;
+        let last_index = {&self.log.last_index.clone()};
+        let peers= {&self.peers.clone()};
+        let mut node = self.transfer_role(
+            super::Leader::new(peers.clone(), last_index.clone())
+        )?;
         Ok(Node::Leader(node.into()))
     }
 }
